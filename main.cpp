@@ -1,7 +1,10 @@
 /**
  * @file main.cpp
- * this file is licensed under following
+ * the original code is licensed under following
  * https://so-wh.at/entry/20080302/p2
+ *
+ * modified 2021/12/24 t.yano@try-hard.co.jp
+ *  correspond to ipv6 and tls
  */
 
 #include <stdio.h>
@@ -30,7 +33,6 @@
 #define PORT_STR TOSTRING(PORT_NUM)
 
 #define MAX_BACKLOG 5
-#define RCVBUFSIZE 256
 #define MAX_EVENTS WSA_MAXIMUM_WAIT_EVENTS
 #define EPOLL_TIMEOUT 1000
 
@@ -166,6 +168,8 @@ int main() {
                         break;
                     }
                 }
+                // Todo: ここエラートラップ要るかな？？？
+
                 if (communicate(ssl_socket)) {
                     SLIST_REMOVE(&head, ssl_socket, str_ssl_socket, entry);
                     if (epoll_ctl(epfd, EPOLL_CTL_DEL, current_fd, &event) < 0) {
