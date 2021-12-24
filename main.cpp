@@ -1,20 +1,34 @@
-#include <winsock2.h>
-#include <ws2tcpip.h>
+/**
+ * @file main.cpp
+ * this file is licensed under following
+ * https://so-wh.at/entry/20080302/p2
+ */
+
 #include <stdio.h>
 #include <io.h>
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
 #include "wsepoll.h"
+#endif
 
 #include <memory.h>
-#include <vector>
 #ifdef _WIN32
-//#pragma comment (lib, "wsock32.lib")
+#include "sys_queue.h"
+#else
+#include <sys/queue.h>
+#endif
+#include "communication.h"
+
+#ifdef _WIN32
 #pragma comment (lib, "Ws2_32.lib")
 #endif
 
+#define PORT_NUM 7
 #define STR(var) #var
 #define TOSTRING(n) STR(n)
-#define PORT_NUM 7
 #define PORT_STR TOSTRING(PORT_NUM)
+
 #define MAX_BACKLOG 5
 #define RCVBUFSIZE 256
 #define MAX_EVENTS WSA_MAXIMUM_WAIT_EVENTS
@@ -23,6 +37,15 @@
 #define die(...) do { fprintf(stderr, __VA_ARGS__); WSACleanup(); exit(1); } while(0)
 #define error(...) do { fprintf(stderr, __VA_ARGS__); } while(0)
 
+#ifdef _WIN32
+#define socketclose(x) closesocket(x)
+#define fdclose(x) _close(x)
+#else
+#define socketclose(x) close(s)
+#define fdclose(x) close(x)
+#endif
+
+#ifdef _WIN32
 static void wsa_startup(WORD version) {
     int n;
     WSADATA wsaData;
@@ -35,40 +58,29 @@ static void wsa_startup(WORD version) {
         die("WASStartup(): WinSock version %d.%d not supported\n", LOWORD(version), HIWORD(version));
     }
 }
-
-int echo(SOCKET sock) {
-    char buf[RCVBUFSIZE + 1];
-    size_t len;
-
-    if ((len = recv(sock, buf, RCVBUFSIZE, 0)) < 0) {
-        error("recv(): %d\n", WSAGetLastError());
-        return -1;
-    }
-
-    if (len == 0) { return 0; }
-
-    buf[len] = '\0';
-    error("recv: %d '%s'\n", sock, buf);
-
-    if (send(sock, buf, len, 0) < 0) {
-        error("send(): %d\n", WSAGetLastError());
-        return -1;
-    }
-
-    return len;
-}
+#endif
 
 
 int main() {
     int epfd;
-    SOCKET sock, socks[MAX_BACKLOG] = { 0 };
+    SOCKET sock, socks[MAX_BACKLOG] = { 0 }; // –{“–‚Í2ŒÂ‚¾‚¯‚Å‚æ‚¢
     struct addrinfo hints = { 0 };
     struct addrinfo* ai0, * ai;
     struct epoll_event event = { 0 };
     int cnt = 0;
     bool new_comer;
+    SSL* ssl;
+    SSL_CTX* ctx;
+    ssl_socket_t ssl_sockets[MAX_EVENTS] = {0};
+    ssl_socket_t *ssl_socket;
+    ssl_socket_header_t head = SLIST_HEAD_INITIALIZER(&head);
 
+#ifdef _WIN32
     wsa_startup(MAKEWORD(2, 0));
+#endif
+
+    ctx = create_context();
+    configure_context(ctx);
 
     hints.ai_family = PF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
@@ -100,22 +112,24 @@ int main() {
         socks[cnt++] = sock;
     }
 
+    SLIST_INIT(&head);
+
     while (1) {
         int i, nfds;
         struct addrinfo sa;
         socklen_t len = sizeof(sa);
-        struct epoll_event events[MAX_EVENTS];
+        struct epoll_event events[MAX_EVENTS] = { 0 };
 
         if ((nfds = epoll_wait(epfd, events, MAX_EVENTS, EPOLL_TIMEOUT)) < 0) {
             die("epoll_wait()\n");
         }
 
         for (i = 0; i < nfds; i++) {
-            SOCKET fd = events[i].data.fd;
+            SOCKET current_fd = events[i].data.fd;
             new_comer = false;
             for (int j = 0; j < MAX_BACKLOG; j++) {
                 sock = socks[j];
-                if (sock == fd) {
+                if (sock == current_fd) {
                     new_comer = true;
                     break;
                 }
@@ -128,6 +142,12 @@ int main() {
                     error("accept() %d\n", WSAGetLastError());
                     continue;
                 }
+                ssl_socket_t *current = new ssl_socket_t();
+                current->ssl = SSL_new(ctx);
+                current->sock = s;
+                SSL_set_fd(current->ssl, s);
+                // QUEUE‚É’Ç‰Á
+                SLIST_INSERT_HEAD(&head, current, entry);
 
                 error("accepted.\n");
 
@@ -137,23 +157,36 @@ int main() {
                 if (epoll_ctl(epfd, EPOLL_CTL_ADD, s, &event) < 0) {
                     die("epoll_ctl()\n");
                 }
+                ;
             }
             else {
-                if (echo(fd) < 1) {
-                    if (epoll_ctl(epfd, EPOLL_CTL_DEL, fd, &event) < 0) {
+                // QUEUE‚©‚çfd‚ðŒ³‚Éssl‚ðŽæ“¾
+                SLIST_FOREACH(ssl_socket, &head, entry) {
+                    if (ssl_socket->sock == current_fd) {
+                        break;
+                    }
+                }
+                if (communicate(ssl_socket)) {
+                    SLIST_REMOVE(&head, ssl_socket, str_ssl_socket, entry);
+                    if (epoll_ctl(epfd, EPOLL_CTL_DEL, current_fd, &event) < 0) {
                         die("epoll_ctl()\n");
                     }
+                    SSL_shutdown(ssl_socket->ssl);
+                    SSL_free(ssl_socket->ssl);
 
-                    closesocket(fd);
+                    socketclose(current_fd);
                 }
             }
         }
     }
 
-    _close(epfd);
+    fdclose(epfd);
     for (int i = 0; i < MAX_BACKLOG; i++) {
-        if (socks[i]) closesocket(socks[i]);
+        if (socks[i]) socketclose(socks[i]);
     }
+    SSL_CTX_free(ctx);
+#ifdef _WIN32
     WSACleanup();
+#endif
     return 0;
 }

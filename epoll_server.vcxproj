@@ -139,10 +139,13 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="communication.cpp" />
     <ClCompile Include="main.cpp" />
     <ClCompile Include="wsepoll.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="communication.h" />
+    <ClInclude Include="sys_queue.h" />
     <ClInclude Include="wsepoll.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

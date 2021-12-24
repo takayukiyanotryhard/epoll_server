@@ -1,3 +1,10 @@
+/**
+ * @file wsepoll.h
+ * this file is licensed under following
+ * https://so-wh.at/entry/20080302/p2
+ */
+
+#ifdef _WIN32
 #pragma once
 
 #ifndef _WSEPOLL_H_
@@ -31,4 +38,5 @@ int epoll_create(int size);
 int epoll_ctl(int epfd, int op, SOCKET fd, struct epoll_event* event);
 int epoll_wait(int epfd, struct epoll_event* events, int maxevents, int timeout);
 
+#endif
 #endif

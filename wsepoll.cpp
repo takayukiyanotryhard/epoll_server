@@ -1,3 +1,10 @@
+/**
+ * @file wsepoll.h
+ * this file is licensed under following
+ * https://so-wh.at/entry/20080302/p2
+ */
+
+#ifdef _WIN32
 #include <winsock2.h>
 #include <windows.h>
 
@@ -221,3 +228,4 @@ static void epoll_wait_clean(SOCKET* fds, HANDLE* hEvents) {
         }
     }
 }
+#endif
