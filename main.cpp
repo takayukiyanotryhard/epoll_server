@@ -5,13 +5,16 @@
 #include "wsepoll.h"
 
 #include <memory.h>
-
+#include <vector>
 #ifdef _WIN32
 //#pragma comment (lib, "wsock32.lib")
 #pragma comment (lib, "Ws2_32.lib")
 #endif
 
-#define ECHO_PORT 7
+#define STR(var) #var
+#define TOSTRING(n) STR(n)
+#define PORT_NUM 7
+#define PORT_STR TOSTRING(PORT_NUM)
 #define MAX_BACKLOG 5
 #define RCVBUFSIZE 256
 #define MAX_EVENTS WSA_MAXIMUM_WAIT_EVENTS
@@ -58,43 +61,48 @@ int echo(SOCKET sock) {
 
 int main() {
     int epfd;
-    SOCKET sock;
-    struct sockaddr_in addr;
-    struct epoll_event event;
+    SOCKET sock, socks[MAX_BACKLOG] = { 0 };
+    struct addrinfo hints = { 0 };
+    struct addrinfo* ai0, * ai;
+    struct epoll_event event = { 0 };
+    int cnt = 0;
+    bool new_comer;
 
     wsa_startup(MAKEWORD(2, 0));
 
-    if ((sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)) == INVALID_SOCKET) {
-        die("socket(): %d\n", WSAGetLastError());
-    }
-
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(ECHO_PORT);
-    addr.sin_addr.S_un.S_addr = INADDR_ANY;
-
-    if (bind(sock, (struct sockaddr*)&addr, sizeof(addr)) != 0) {
-        die("bind(): %d\n", WSAGetLastError());
-    }
-
-    if (listen(sock, MAX_BACKLOG) != 0) {
-        die("listen(): %d\n", WSAGetLastError());
-    }
+    hints.ai_family = PF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_flags = AI_PASSIVE;
+    getaddrinfo(NULL, PORT_STR, &hints, &ai0);
 
     if ((epfd = epoll_create(MAX_EVENTS)) < 0) {
         die("epoll_create()\n");
     }
 
-    memset(&event, 0, sizeof(event));
     event.events = EPOLLIN;
-    event.data.fd = sock;
+    for (ai = ai0; ai; ai = ai->ai_next) {
+        if ((sock = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol)) == INVALID_SOCKET) {
+            die("socket(): %d\n", WSAGetLastError());
+        }
 
-    if (epoll_ctl(epfd, EPOLL_CTL_ADD, sock, &event) < 0) {
-        die("epoll_ctl()\n");
+        if (bind(sock, ai->ai_addr, ai->ai_addrlen) != 0) {
+            die("bind(): %d\n", WSAGetLastError());
+        }
+
+        if (listen(sock, MAX_BACKLOG) != 0) {
+            die("listen(): %d\n", WSAGetLastError());
+        }
+
+        event.data.fd = sock;
+        if (epoll_ctl(epfd, EPOLL_CTL_ADD, sock, &event) < 0) {
+            die("epoll_ctl()\n");
+        }
+        socks[cnt++] = sock;
     }
 
     while (1) {
         int i, nfds;
-        struct sockaddr_in sa;
+        struct addrinfo sa;
         socklen_t len = sizeof(sa);
         struct epoll_event events[MAX_EVENTS];
 
@@ -104,12 +112,21 @@ int main() {
 
         for (i = 0; i < nfds; i++) {
             SOCKET fd = events[i].data.fd;
+            new_comer = false;
+            for (int j = 0; j < MAX_BACKLOG; j++) {
+                sock = socks[j];
+                if (sock == fd) {
+                    new_comer = true;
+                    break;
+                }
+            }
 
-            if (sock == fd) {
+            if (new_comer) {
                 int s;
 
                 if ((s = accept(sock, (struct sockaddr*)&sa, &len)) < 0) {
-                    die("accept()\n");
+                    error("accept() %d\n", WSAGetLastError());
+                    continue;
                 }
 
                 error("accepted.\n");
@@ -134,8 +151,9 @@ int main() {
     }
 
     _close(epfd);
-
-    closesocket(sock);
+    for (int i = 0; i < MAX_BACKLOG; i++) {
+        if (socks[i]) closesocket(socks[i]);
+    }
     WSACleanup();
     return 0;
 }
